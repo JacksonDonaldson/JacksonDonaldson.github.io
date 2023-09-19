@@ -4,7 +4,12 @@ function mouseover(event){
     for(let i = 1; i < 8; i++){
         let element = document.getElementById("connect1" + i);
         if(i == column){
-            element.src= "./images/topRed.png";
+			if(currentPlayer == 1){
+				element.src= "./images/topRed.png";
+			}
+			else{
+				element.src = "./images/topYellow.png";
+			}
         }
         else{
             element.src = "./images/topEmpty.png";
@@ -12,10 +17,41 @@ function mouseover(event){
     }
 }
 
-//
-var grid = [[]]
+
+let grid = [[0,0,0,0,0,0,0],
+		[0,0,0,0,0,0,0],
+		[0,0,0,0,0,0,0],
+		[0,0,0,0,0,0,0],
+		[0,0,0,0,0,0,0],
+		[0,0,0,0,0,0,0]];
+let currentPlayer = 1;
+
+			
 function playMove(event){
     let column = event.id[8];
+	console.log(column);
+	let row = -1;
+	
+	for(let i = 5; i >= 0; i--){
+		if(grid[i][column-1] == 0){
+			row = i;
+			break;
+		}
+	}
+	if(row != -1){
+		let element = document.getElementById("connect"+(row+2) + column)
+		grid[row][column-1] = currentPlayer;
+		if(currentPlayer == 1){
+			document.getElementById("connect1" + column).src = "./images/topYellow.png";
+			element.src = "./images/connect4Red.png";
+		}
+		else{
+			document.getElementById("connect1" + column).src = "./images/topRed.png";
+			element.src = "./images/connect4Yellow.png";
+		}
+		currentPlayer = -currentPlayer;
+	}
+		
 }
 
 
