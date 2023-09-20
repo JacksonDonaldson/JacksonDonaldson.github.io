@@ -69,6 +69,10 @@
   background-color: #04AA6D;
   color: white;
 }
+
+.gitimage {
+	height: 200px;
+}
 .centralPopup{
 	position:fixed;
 	top:50%;
