@@ -1,5 +1,7 @@
 function mouseover(event){
-    
+    if(currentPlayer == 0){
+      return;
+    }
     let column = event.id[8];
     for(let i = 1; i < 8; i++){
         let element = document.getElementById("connect1" + i);
@@ -26,10 +28,43 @@ let grid = [[0,0,0,0,0,0,0],
 		[0,0,0,0,0,0,0]];
 let currentPlayer = 1;
 
-			
+function outOfBounds(row, col){
+  return row < 0 || row > 5 || col < 0 || col > 6
+}
+
+function checkDelta(row, col, drow, dcol){
+  val = grid[row][col];
+  let tempConnectivity = 0;
+  currentCol = col;
+  currentRow = row;
+  while (grid[currentRow][currentCol] == val){
+    currentCol += dcol;
+    currentRow += drow;
+    tempConnectivity++;
+    if(outOfBounds(currentRow, currentCol)){
+      break;
+    }
+  }
+  currentCol = col - dcol;
+  currentRow = row - drow;
+  while (grid[currentRow][currentCol] == val){
+    currentCol -= dcol;
+    currentRow -= drow;
+    tempConnectivity++;
+    if(outOfBounds(currentRow, currentCol)){
+      break;
+    }
+  }
+  return tempConnectivity;
+}
+function getConnectivity(row, col){
+  return Math.max(checkDelta(row, col, 0, 1), checkDelta(row, col, 1, 0), checkDelta(row, col, 1, 1), checkDelta(row, col, 1, -1));
+}	
 function playMove(event){
-    let column = event.id[8];
-	console.log(column);
+  if(currentPlayer == 0){
+    return;
+  }
+  let column = event.id[8];
 	let row = -1;
 	
 	for(let i = 5; i >= 0; i--){
@@ -49,6 +84,17 @@ function playMove(event){
 			document.getElementById("connect1" + column).src = "./images/topRed.png";
 			element.src = "./images/connect4Yellow.png";
 		}
+    console.log(getConnectivity(row, column-1))
+    if(getConnectivity(row, column-1) >= 4){
+      
+      for(let i = 1; i < 8; i++){
+        let element = document.getElementById("connect1" + i);
+        element.src = "./images/topEmpty.png";;
+      }
+      let win = document.getElementById("winMsg");
+      win.textContent = (currentPlayer == 1 ? "Red " : "Yellow ") + "wins!";
+      currentPlayer = 0;
+    }
 		currentPlayer = -currentPlayer;
 	}
 		
