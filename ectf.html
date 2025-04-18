@@ -120,7 +120,7 @@
 					<li>Let F2 = E ^ I_A4 ^ I_A5, F3 = A5. Learn D_channel(E ^ I_A4 ^ I_A5 ^ I_A5) ^ I_{E^I_A4_I_A5}</li>
 					<li>Repeat steps 3 and 4 with E = E^I_A4_I_A5, and new values of A4 and A5 until you've exhausted your entire list.</li>
 				</ol>
-				<p>At this point, as promised, we can learn the decryption of any combination of xors of I_As. Use 5. To find some combination of I_As that xor to the ciphertext of the expired subscription's decoder ID, and learn what it decrypts to.</p>
+				<p>At this point, as promised, we can learn the decryption of any combination of xors of I_As. Use the collision generator presented in step 5 to find some combination of I_As that xor to the ciphertext of the expired subscription's decoder ID, and learn what it decrypts to.</p>
 				<img src="scribbles.jpg" style="height:600"/>
 				<h3>The above steps, as I originally drew them out</h3>
 
