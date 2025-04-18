@@ -1,0 +1,139 @@
+<html>
+	<head>
+		<link rel="stylesheet" href="mycss.css">
+	</head>
+	<body>
+		<div class="lighterbar">
+			<h1 class="titleText">Jackson Donaldson</h1>
+		</div>
+		<div class="bar">
+			<div class="topnav">
+				<a href="/">Home</a>
+				<a href="/resume">Resume</a>
+				<a href="/tetris3D">Tetris3D</a>
+				<a href="/zelda">Zelda3D</a>
+				<a href="/ghost">GhostGame</a>
+				<a href="/connect4">Connect4</a>
+				<a href="/writeups">Writeups</a>
+				<a href="/briefcase">Briefcase PC</a>
+				<a href="/ectf" class="active">ECTF</a>
+			</div>
+		</div>
+		
+			
+		<div class="back" style="padding-top:15px;height:9000;">
+			<div style="width:840;margin:auto;">
+				<h1>Bad Crypto and Infinite Birthdays</h1>
+				<h2>A writeup for MITRE's Embedded Capture The Flag competition</h2>
+				<p> I competed in MITRE's 2025 Embedded Capture The Flag (ECTF) competition with the University of Michigan. I wrote a QEMU implementation for the MAX78000FTHR dev board used in the competition, integrated AFL into uart in QEMU system mode for some fuzzing capabilities, and then was really sad when the entire competition turned out to be attacks on bad crypto, rather than any binary exploitation. Learned a lot doing it anyways, such is life.</p>
+				
+				<p> Anyways, the basic idea behind the 2025 ECTF was to create a satellite TV system. Each team made an "encoder" to sit at a secure site and encrypt TV frames for broadcasting and a "decoder" to distribute to customers to decrypt those broadcasted frames. Decoders were to accept subscriptions that specified time ranges and channel numbers, then only decrypt TV frames that fell into subscribed channels and times.</p>
+				
+				<img src = "ectf_explained.png" style="width:840"/>
+				<h3>High-Level Satellite TV System (Credit: MITRE)</h3>
+				<p> We submitted a design (we did some cool tree-based key derivation, but who cares about defense so let's skim over that), then moved in to the attack phase where we were given access to each other team's design and a decoder with their firmware on it. We were given an active subscription to channel 1, a subscription only valid for past timestamps on channel 2, a subscription targeting a different decoder on channel 3, and no subscription at all for channel 4; the idea was to use those and the decoder to decrypt every channel being broadcasted.</p>
+				
+				<p> In terms of attacks there was, as previously mentioned, a lot of bad crypto and not a lot of binary exploitation. The organizers released a base design with a trivial buffer overflow in main; unfortunately, and I think inadvertently, that overflow wasn't exploitable since main never returned. It also happened to make a lot of other overflow-based attacks impossible; the input buffer was at the top of the stack at the top of RAM, meaning writing more bytes than expected would just crash the decoder without doing anything useful. </p>
+
+				<h1>The only decent bit of PWN</h1>
+				<p> We still managed a few binary exploitation attacks though. In one particularly neat attack, we could overwrite saved registers with the result of AES ECB decryption; we found an oracle for decryption of random data under that key, then farmed plaintext-ciphertext pairs for around 5 days. </p>
+				
+				<img src = "binghamton_update.png" style="width:840"/>
+				<h3>Vulnerable update function. Note the call to decrypt_sym with no bounds-checking.</h3>
+
+				<p>We eventually found a ciphertext/plaintext pair that happened to set the caller-saved register r4 on the stack to the address of a global secret key. Interestingly, main used r4 to store a pointer to an error string</p>
+				
+				<img src = "binghamton_print.png" style="width:540"/>
+				<h3>"Failed to receive cmd from host" is stored in r4</h3>
+				<p>All we had to do, then, was send the ciphertext in just the right spot of a subscription, then cause the error to trigger by sending an invalid packet. This leaked the master key & got us all flags. (We also looked to overwrite lr to jump to a buffer we controlled, but we found this ciphertext/plaintext pair first)</p>
+				<p></p>
+				<h1> Cool crypto nonsense </h1>
+				<p> The most interesting attack was on a team that used unauthenticated 2-layer AES CBC where the IV was a shared secret. That team implemented subscription messages as follows:</p>
+
+				<img src = "purdue2_sub.jpg" style="height:600;"/>
+				<h3> Subscription Message Format</h3>
+				
+				<p> First, the decoder ID is encrypted using a per-channel key and a static per-channel IV. Then that ciphertext is appended to the channel number, padded to 16 bytes, and the start and end times of the subscription. This entire message is encrypted with the master key and the static master IV.</p>
+			
+				<p> The decoder, when processing subscription messages, first decrypts the entire message with the master key. It then verifies that the 12 bytes of channel number padding are correct, uses that channel's key to decrypt the decoder id, and verifies that it matches the decoder id baked in to the firmware. Master and channel keys and IVs are also baked in to the firmware.</p>
+			
+				<p> Since the IVs are static and padding is verified in a way that gives no information, a lot of the classic CBC malleability attacks don't work here. We do, however, have one degree of freedom. </p> 
+				<img src = "purdue2_sub_attack.jpg" style="height:600;"/>
+				<h3>Potential attack on expired subscription</h3>
+				<p> As seen above, if we know what the decoder id block decrypts to under the master key, we can substitute it for some other block we know the decryption of. Then we can set the timestamp block such that the result of the master key decryption is the same. </p>
+				<p>The decoder id will then match and the channel will be the same, but the end and start time of the subscription will be random. We could try that a few thousand times to eventually luck out, transform our expired subscription to an active one, and get a flag on channel 2.</p>
+				<p>We devised an 8 step plan to make this possible.</p>
+				<ol>
+					<li>Leak channel 1 IV</li>
+					<li>Leak master IV</li>
+					<li>Learn some plaintext/ciphertext pairs on master key</li>
+					<li>Learn high-entropy plaintext/ciphertext pairs on master key</li>
+					<li>Generate a 128-bit collision by taking advantage of the properties of the generalized birthday problem</li>
+					<li>Use that collision to learn the decryption of expired subscription's decoder id ciphertext</li>
+					<li>Generate subscriptions with random timestamps until we have an active subscription on channel 2</li>
+					<li>Use the subscription to decrypt channel 2 frames and win</li>
+				</ol>
+
+				<img src = "puzzled.jpg" style="height:600;"/>
+				<h3>Andre Quimper Osores and I about to make a breakthrough, spend an hour implementing it, then realize we swapped some variables and actually we have nothing. Image credit Charlie Herz</h3>
+
+				<h2>1. Leaking Channel 1 IV</h2>
+				<p>The basis of most of these steps was our ability to send arbitrary data as a channel 1 frame. Frame decryption in this design is generally pretty similar to subscription decryption.</p>
+				<img src ="purdue2_decode.jpg" style="height:600;"/>
+				<h3>Frame Format</h3>
+				<p>First, the decoder decrypts the entire message with the master key. It then ensures that the header block is has a reasonable length and channel. If these checks pass, it decrypts the remainder of the message again using the channel key. The first block of this decryption is the "CompanyStamp," a static string they check has not changed. The remainder is the data transmitted in the frame.</p>
+				<p>Using the decoder functionality, we can learn 2 interesting things.   </p>
+				<li>If the Company Stamp is wrong, the decoder outputs the entire incorrect block.</li>
+				<li>Frames are unverified, so we can send anything we want as F2 and F3 to learn D_channel(I_F3 ^ F2) ^ I_F2</li>
+				<p>To learn Channel 1 IV, we sent the channel 1 subscription as a channel 1 frame.</p>
+				<img src = "purdue2_chiv.jpg" style="height:800;"/>
+				<h3>Learn channel IV by sending subscription as frame</h3>
+				<p>Because this team is decrypting subscriptions and channels with the same set of keys, we know that the value leading in to the xor before Plaintext2 F3 is the same. Normally that value would get xor'd with the channel IV to become the decoder ID of a subscription, but here it's getting xor'd with a known value. This means we can learn what it is before the xor, and therefore we can learn what the channel IV must be to produce the right decoder ID when subscribing.</p>
+				
+				<h2>2. Leaking Master IV</h2>
+				<p>Send a frame Header and CompanyStamp as F2 and F3. Then we learn D_channel(I_CompanyStamp ^ Header) ^ I_Header</p>
+				<p>However, because we know the Channel IV, we know D_channel(I_CompanyStamp ^ Header); it must be true that D_channel(I_CompanyStamp ^ Header) ^ Channel IV == CompanyStamp, but we know CompanyStamp (it's static), so we can solve for the last unknown.</p>
+				<p>Therefore we learn I_header. But we know the plaintext that Header corresponds to; the channel must be 1, the time is given in the sattelite, and the length is always 64. Therefore I_header ^ Master IV == known, so we can solve for master IV</p>
+			
+				<h2>3. Learn some plaintext/ciphertext pairs on master key</h2>
+				<p>Since we know what headers decrypt to and we know the master IV, we know I_header for every header.</p>
+
+				<h2>4. Learn some high-entropy plaintext/ciphertext pairs on master key</h2>
+				<p>Once again, by choosing nice values for F2 and F3 we can learn interesting things.</p>
+				<p>Set F2 = Header1 and F3 = Header2. You learn D_c(I_Header2 ^ Header1) ^ I_Header1, but you know I_Header1. You learn D_c(I_header2^Header1).</p>
+				<p>Next, set F3 = Header1, and F2 such that F2 ^ I_Header1 == I_Header2 ^ Header1. You learn D_c(F2 ^ I_Header1) ^ I_F2, but by construction D_c(F2 ^ I_Header1) == D_c(I_header2^Header1), which you know from the previous step. Therefore you learn I_F2, the decryption under the master key of random data. You can repeat this, setting Header1 = F2 to learn a new F2.</p>
+			
+				<h2>5. Generate a 128-bit collision by taking advantage of the properties of the generalized birthday problem</h2>
+				<p> We can, by a series of decode operations to be explained in step 6, learn the decryption under the master key of the xor of any number of the I_F2 values obtained in step 4.</p>
+				<p> It's pretty easy to see that with >> 128 random strings of length 128 bits, some subset of them must xor to any value. The problem is finding the correct combination.</p>
+				<p><i>A Generalized Birthday Problem</i> by Wagner outlines a solution to a similar problem, but a naive implementation of the algorithm presented in the paper would require several million samples. We modified the paper's algorithm to better suit our use case (rather than having k independent lists we wish to xor, we have one list, and we don't care how long the resulting xor chain is) and got it down to a few thousand samples.</p>
+				<img src="collision.png" style = "width:840;"/>
+				<h3>Pictured: the index of 84 random bitstreams of length 128 bits that xor to 0</h3>
+
+				<h2>6. Use that collision to learn the decryption of expired subscription's decoder id ciphertext</h2>
+				<p>From now on, I'll refer to a block we know the decryption of as An, where n is some number and its decryption as I_An.</p>
+
+				<ol>
+					<li>Set F2 = A2, F3 = A1. Learn D_channel(A_2^I_A1) ^ I_A2. Learn D_channel(A_2 ^ I_A1).</li>
+					<li>Set F2 = A2 ^ I_A1 ^ I_A3, F3 = A3. Learn D_channel(A2^I_A1^I_A3^I_A3) ^ I_{A2^I_A1^I_A3}, but I_A3 ^ I_A3 == 0, so we learn I_{A2^I_A1^I_A3}</li>
+					<li>Let E = A2^I_A1^I_A3. Set F2 = E, F3 = A4. Learn D_channel(E ^ I_A4) ^ I_E. Learn D_channel(E ^ I_A4)</li>
+					<li>Let F2 = E ^ I_A4 ^ I_A5, F3 = A5. Learn D_channel(E ^ I_A4 ^ I_A5 ^ I_A5) ^ I_{E^I_A4_I_A5}</li>
+					<li>Repeat steps 3 and 4 with E = E^I_A4_I_A5, and new values of A4 and A5 until you've exhausted your entire list.</li>
+				</ol>
+				<p>At this point, as promised, we can learn the decryption of any combination of xors of I_As. Use 5. To find some combination of I_As that xor to the ciphertext of the expired subscription's decoder ID, and learn what it decrypts to.</p>
+				<img src="scribbles.jpg" style="height:600"/>
+				<h3>The above steps, as I originally drew them out</h3>
+
+				<h2>7. Generate subscriptions with random timestamps until we have an active subscription on channel 2</h2>
+				<p>We now have a bunch of plaintext/ciphertext pairs under the master key, and we know what the decoder ID decrypts to. You can use this as described in the intro of this section to generate subscriptions to random timeframes until you hit the desired time range.</p>
+				<h2>8. Use the subscription to decrypt channel 2 frames and win</h2>
+				<p>The heading says it all, really</p>
+
+				<h2>Conclusion</h2>
+				<p>Competition was fun, most of the attacks were not as involved as the above. Lots of cbc malleability, bad signatures (don't forget to sign your iv!), etc. We got 4th out of 116 teams, not bad for our first year.</p>
+			</div>
+
+		</div>
+		
+	</body>
+</html>
