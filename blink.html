@@ -1,0 +1,345 @@
+<html>
+	<head>
+		<link rel="stylesheet" href="mycss.css">
+	</head>
+	<body>
+		<div class="lighterbar">
+			<h1 class="titleText">Jackson Donaldson</h1>
+		</div>
+		<div class="bar">
+			<div class="topnav">
+				<a href="/">Home</a>
+				<a href="/resume">Resume</a>
+				<a href="/tetris3D">Tetris3D</a>
+				<a href="/zelda">Zelda3D</a>
+				<a href="/ghost">GhostGame</a>
+				<a href="/duck">Ducks</a>
+				<a href="/connect4">Connect4</a>
+				<a href="/briefcase">Briefcase PC</a>
+				<a href="/ectf">ECTF</a>
+                <a href="/blink" class="active">Blink</a>
+			</div>
+		</div>
+		
+			
+		<div class="back" style="padding-top:15px;height: 23600px;">
+            <p>August 2025</p>
+			<div style="width:840;margin:auto;">
+				<h1> Reverse Engineering & Vulnerability Research on Amazon's Blink Video Doorbell</h1>
+                <h2> Summary </h2>
+                <p> Versions 12.81 and earlier of the Blink Video doorbell are vulnerable to a buffer overflow in the http server available during device setup. This could allow an attacker on any device within range of the Blink's WAN to gain arbitrary code execution and persistance through an unrelated trusted boot bypass. There is a highly limited vulnerable window (just during initial setup). Version 12.82, released June 22nd 2025, patches the buffer overflow. My analysis suggests the trusted boot bypass remains active in version 12.82, though I have not confirmed this. A proof of concept for version 12.81 is <a href="https://github.com/JacksonDonaldson/orbital-fracture">available on my Github</a>. I'm calling the exploit chain "orbital fracture" for no particular reason.</p>
+                
+                <h2> The Start of the Story </h2>
+                <p> Last November, I was in need of a project. I picked up a Blink video doorbell since it was a cheap and mildly interesting IoT device. I figured could entertain myself for a bit by tearing it apart to see how it worked. </p>
+                <div style="display: flex; align-items: center; gap: 20px;">
+                    <img src="blink/package.png" style="width: 250%;"/>
+                    <p> I ended up finding a neat decryption buffer overflow during system initialization & managed to pivot that to full persistent arbitrary code execution with a trusted boot bypass. That was good for $7000 and a severity rating of 'high' when I reported it via HackerOne. Getting to that point was a bit of a pain though; it turns out the Blink runs on a niche and mostly proprietary ISA (ARCompact) and has more reasonable security than a lot of other devices I've worked with.</p>
+                </div>
+                <h2> First Steps </h2>
+                <p> To get my bearings, I ran through the official setup process on my phone, snooping on the network with PCAPdroid and bluetooth recording enabled (Android just supports that, you don't even need root!). The blink throws out a wifi network with an ssid based on its serial number; the Blink app connects to that network, does some configuration (over http, but most of the data is encrypted), and then you’re good to go. After that point, it seems like Blink relies on a connection to your wifi network for everything, communicating via Amazon’s servers. </p>
+                <img src="blink/wireshark_get_ssids.png" style="width:100%"/>
+                <p style="text-align: center;">A request to the Blink's http server</p>
+                <h2> Next step: Tear Down </h2>
+                <p> At this point ideally I'll find a microcontroller and some flash memory, dump the flash to find what code the device is running, and start reverse engineering. I found 3 promising looking chips: </p>
+
+                <div style="display: flex; align-items: center; gap: 20px;">
+                    <div>
+                        <img src="blink/arm.png" style="width: 100%;"/>
+                        <p>Arm core</p>
+                    </div>
+                    <div>
+                        <img src="blink/flash.png" style="width: 100%;"/>
+                        <p>Flash memory</p>
+                    </div>
+                    <div>
+                        <img src="blink/unknown.png" style="width: 100%;"/>
+                        <p>Unknown chip</p>
+                    </div>
+                </div>
+
+                <p>I get my wish, mostly. The first chip is pretty easily identifiable as <a href="https://www.silabs.com/mcu/32-bit-microcontrollers/efm32pg22-series-2">this Arm Cortex mcu</a>, and the second is <a href="http://www.winbond.com/hq/product/code-storage-flash-memory/serial-nor-flash/?__locale=en&partNo=W25Q256JW">this SPI flash</a>. The third chip is centrally located, reasonably sized, and looks like it should be a microcontroller. Unfortunately, the only references to AC1002B2-FB I can find online are related to the Blink. In the process, I found <a href="https://astrid.tech/2022/07/07/0/blink-mini-disassembly/">a few blog posts on astrid.tech</a> and <a href="https://www.brainonfire.net/blog/2023/10/21/reversing-blink/">one at brainonfire.net</a> that talk about disassembling similar devices. Astrid managed to dump the flash; Let's follow those footsteps.</p>
+
+                <p>I didn't really want to pull the spi flash off the board though. With the help of my friend Andre I was able to identify some pads that are electrically connected to the relevant pins of the flash chip; we soldered jumpers to them and tried to read the chip.</p>
+
+                <div style="display: flex; align-items: center; gap: 20px;">
+                    <img src="blink/soldering.png" style="width: 40%;"/>
+                    <p>I'm really good at soldering, I promise; those burn marks are on purpose</p>
+                </div>
+
+                <p>We ran into a problem immediately; the flash chip runs on 1.8v, and the FT232h I had only worked on 3.3 or 5 volts. Using some arcane trickery only known to CE majors, Andre attempted to homebrew a level shifter.</p>
+
+                <div style="display: flex; align-items: center; gap: 20px;">
+                    <img src="blink/level_shifter.png" style="width: 100%;"/>
+                    <p>What is this? Why is there a variable resistor? Don't ask me</p>
+                </div>
+
+                <p>It was a valiant attempt, but worked about as well as could be expected. I ordered a level shifter off Amazon and waited a few days. The version of flashrom distributed by Ubuntu didn't have support for the W25Q256JW, but after a quick build from source we were in business.</p>
+        
+                <img src="blink/flashrom.png" style="width: 100%;"/>
+                <p></p>
+                <img src="blink/strings.png" style="width: 100%;"/>
+                <p style="text-align: center;">The business in question</p>
+                
+
+                <p>I ran the command a second time and verified it produced the same file both times (long wires and noise in the system can lead to bitflips if the clock rate is too high for the signal to settle between pulses; the flashrom option divisor=8 clocks the devices at an eighth of the normal speed to compensate). Now all we have to do is parse the contents.</p>
+
+                <h2>Decompilation</h2>
+                <p>Binwalking the dump only found a couple x.509 certificates, but it seemed pretty structured; time to reverse engineer the format. The first thing to do is check out the dump on binvis.io.</p>
+
+                <div style="display: flex; align-items: center; gap: 20px;">
+                    <img src="blink/binvis.png" style="width: 50%;"/>
+                    <p>Entropy of the dump, visualized with <a href="binvis.io">binvis.io</a></p>
+                </div>
+                <p>The dark regions are low entropy repeated 0xff's, the purple regions are code or strings, and the bright pink is encrypted or compressed data. Since files are generally separated by empty regions, this visualization makes it really easy to pick out where they start and end. I grabbed a couple file start offsets, searched the binary for them to try and find a struct describing the layout, and got lucky enough to pretty quickly find one.</p>
+
+                <img src="blink/header.png" style="width: 100%;"/>
+                <p style="text-align: center;">First few bytes of flash with file structure highlighted.</p>
+
+                <p>Each firmware BUND(le) contains 0x24 bytes of header information, then repeated 0x10 byte blocks describing files. Each block has an ID (yellow), version (green), offset (blue), and length (pink). All information is stored in big endian, which suggests the main processor is also big endian. I wrote a quick python script to parse out individual files.</p>
+
+                <img src="blink/firmware_files.png" style="width: 100%;"/>
+                <p style="text-align: center;">Files, since labelled.</p>
+                
+                <p>Having parsed the firmware files, one file immediately stuck out; it had nearly every string, and had to be the app. I turned my attention to it, and initial progress wasn’t great. Trying to decompile the app with any ISA available on Ghidra yielded mostly nonsense. I could tell the segment was code, and not encrypted; Ghidra has a neat feature kind of like binvis where it’ll give you an overview of the entropy of the file in the sidebar. Arm, x86, and ascii all have distinct entropy profiles based on how densely encoded information is, so Ghidra can normally automatically label segments.</p>
+
+                <img src="blink/ghidra_entropy.png" style="width: 100%;"/>
+                <p style="text-align: center;">Attempting to decompile the app in ARM big endian; that’s clearly not a real function</p>
+
+                <p>The blue segment at the bottom of the bar is mostly ascii strings; everything above that is code. After doing some more looking around, I found the following string:</p>
+                <p><code>Copyright (c) 1996-2018 Express Logic Inc. * NetX Duo ARC600/MetaWare Version G5.11.5.0 SN: Amaxon_Eval_10-18-18 *</code></p>
+
+                <p>ARC600 is a processor family produced by Synopsis; they’re all ARCompact based, a compressed instruction set. The AC1002B2-FB proprietary chip must be ARC based and running the main app. Unfortunately, Ghidra doesn’t support ARCompact. I had no luck trying to find a decent decompiler, or even a working disassembler for big endian ARCompact. I did find a <a href="https://www.sstic.org/media/SSTIC2021/SSTIC-actes/analyzing_arcompact_firmware_with_ghidra/SSTIC2021-Article-analyzing_arcompact_firmware_with_ghidra-iooss.pdf">fork of Ghidra by Nicolas Iooss</a> that claimed to work on little endian systems, and figured making that modification wouldn’t be too bad. Generally just changing a few lines in the language definition should do the trick, but in this case it didn’t because ARCompact in little endian mode actually operates in middle endian.</p>
+
+                <img src="blink/arcompact_reference.png" style="width: 100%;"/>
+                <p style="text-align: center;">Page 32 of the <a href="http://me.bios.io/images/d/dd/ARCompactISA_ProgrammersReference.pdf">ARCompact programmer’s reference</a></p>
+
+                <p>I went in, changed a few lines of the slaspec (Ghidra’s way of defining an instruction set), and I had a working <a href="https://github.com/JacksonDonaldson/arcompact_be_ghidra/">big endian ARCompact decompiler</a>.</p>
+
+                <h2>The Fun Part (Software RE)</h2>
+                <p>I find working my way through a massive codebase in Ghidra to be a great time. You can pick apart one segment at a time, gradually building up an understanding of how all the pieces work together. It’s a lot like playing a puzzle game; it’s crazy people will pay me to do it. It doesn’t exactly make for gripping reading though, so I’ll just lay out a couple tricks I picked up.</p>
+
+                <p>You can tell Ghidra to assume the value of a register at certain memory addresses; this is really handy when working with global pointer (gp) registers.</p>
+
+                <img src="blink/gp_register.png" style="width: 100%;" />
+                <p style="text-align: center;">App setting gp on initialization</p>
+
+                <p>Gp is initialized to point at the start of global data and never modified; this lets future instructions use it as a base address when referencing addresses in that region, reducing code size. If you use the “Set Register Value” option, Ghidra will be able to resolve those references, making for a much cleaner decompilation.</p>
+
+                <p>Marking functions as “not returning” when appropriate can clean up decompilation significantly, and all you have to do is check a box while editing the function signature.</p>
+
+                <div style="display: flex; align-items: center; gap: 20px;">
+                    <img src="blink/not_returning.png" style="width: 100%;" />
+                    <img src="blink/returning.png" style="width: 100%;" />
+                </div>
+                
+                <p style="text-align: center;">Call_main marked as not returning (left) and returning (right).</p>
+
+                <p>AI can be helpful too:</p>
+                <img src="blink/ai_output.png" style="width: 100%;" />
+                <p style="text-align: center;">Claude’s output</p>
+
+                <p>I found some success just copy-pasting the contents of the decompilation window into Claude. Certainly it was wrong a fair amount of the time, but it also would occasionally pick up on identifying patterns and constants I wasn’t aware of.</p>
+
+                <p>After many hours of work, I had:</p>
+                <ul>
+                    <li>Discovered that the Blink runs on the RTOS ThreadX</li>
+                    <li>Identified plenty of interesting debug print statements</li>
+                    <li>Reverse engineered my way through the entire networking stack (Don't do this if you're looking for efficiency. Just find the open source library (Netxduo in this case), nobody writes their own network stack. Great way to learn tcp, ip, udp, dns, and dhcp though) </li>
+                    <li>And found the HTTP server handling initialization</li>
+                </ul>
+
+                <p>Up to this point, I hadn’t been able to identify serial output on the board, but I saw an opportunity: every invalid request to the HTTP server would generate a few error messages. I factory reset the Blink to get it to launch its Wi-Fi network, then connected my laptop and hammered the server with repeated messages. I then probed pads on the board with a multimeter until I found one with its voltage jumping all over the place (an oscilloscope would be the preferred way to do this, but I didn’t own one at the time).</p>
+
+                <img src="blink/debug_logs.png" style="display: block; margin: 0 auto;" />
+                <p style="text-align: center;">Debug logs!</p>
+
+                <p>It’s the pin labeled TM 58 at baud rate 230400, if you’re doing some OSINT of your own. The Blink has a ton of debug prints, so finding serial output was a big help in reverse engineering. At this point, I wanted to investigate that HTTP server a bit more, so I decided to take a look at the app for some context.</p>
+                <h2>The Blink App</h2>
+                <p>I grabbed the APK off my phone, then ran it through apktool and loaded it into JADX. The app was sending some kind of request off to the server, then got back some data to establish a shared secret with the device.</p>
+
+                <img src="blink/jadx_decompilation.png" style="width: 100%;" />
+                <p style="text-align: center;">JADX decompilation of send key</p>
+
+                <p>I wanted to see what that server request looked like, but it was over HTTPS. Apps built targeting Android 7 and later don’t trust user-installed certificates, so I couldn’t just use the same MITM proxy I had used to grab the HTTP requests to the Blink. I ended up patching the network security config and rebuilding the app; apktool supports this, you just have to resign the app with your own private key (I used <a href="https://github.com/mon231/buildapp">buildapp</a> for this, but I've since discovered <a href="https://github.com/APKLab/APKLab">APKLab</a>, which is awesome).</p>
+
+                <img src="blink/network_security_config.png" style="width: 100%;" />
+                <p style="text-align: center;">Network security config, patched to trust user certificates</p>
+
+                <p>I also patched the manifest to run the app in debug mode, allowing me to run as its user in ADB and gain access to its private files. This wasn’t useful, but being able to MITM the app was.</p>
+
+                <img src="blink/mitm_proxy.png" style="width: 100%;" />
+                <p style="text-align: center;">MITM proxy capturing app traffic</p>
+
+                <p>As you can see, the app sends a request to the server for a session key, giving the server the serial number of the Blink. My assumption is that there’s a key derivation function on the other end that’ll spit out the device key baked into the Blink’s firmware, and that this is used to encrypt the session key. The app never gets access to the device key, just a plaintext/ciphertext pair that it can communicate to the Blink and establish a shared session key. With this proxy, I know that secret and can start decrypting the traffic.</p>
+                
+                <h2>Buffer Overflow</h2>
+                <p>Before I got around to decrypting the traffic, I got distracted. Here’s the function that handles setting that shared secret on the Blink:</p>
+
+                <img src="blink/vulnerable_function.png",  style="display: block; margin: 0 auto;" />
+                <p style="text-align: center;">The vulnerable function</p>
+
+                <p>Note the 0 in the call to <code>aes_cbc_decrypt</code>; that’s where the length of the output buffer should be, and a 0 means ‘just assume it’s the same as the input.’ Since the output buffer is on the stack, we have a classic stack overflow. The overflowed bytes are the result of an AES decryption with the device key, which we don’t know. Or do we?</p>
+
+                <p>After some more reverse engineering, I found that the key was loaded directly from flash, from a segment I could edit (most of the flash is verified by trusted boot, preventing me from just running arbitrary code). That segment was encrypted and verified by another key loaded straight from trusted boot, preventing me from setting the device key directly. I was in luck though; there was legacy code! If an attempt to parse the region with the AES key I was interested in failed, the Blink would fall back to 3 different potential structures, and one of those wasn’t encrypted or authenticated.</p>
+
+                <img src="blink/fallbacks.png" style="display: block; margin: 0 auto;"/>
+                <p style="text-align: center;">Fallbacks are really helpful</p>
+
+                <p>Mode 3 contained all the data I needed to control and was only validated with a CRC checksum. I was able to reverse engineer the expected structure, overwrite the device key with all 1s, and control the stack overflow to start gaining execution.</p>
+
+                <p>I found a simple chain to leak the stack pointer (since you control return addresses, jump to something that runs <code>mov r1, sp</code> & returns, then jump to code that pops <code>r0</code> and set it to point to a string containing a <code>%08x</code>, then jump to <code>printf</code>). Knowing the location of the stack, I figured I would be able to include some shellcode in the submission and jump to it. Doing so just crashed the device though. After some experimentation and review of the ARCompact programmer’s reference, I found out that:</p>
+                <ul>
+                    <li>Regions that shouldn’t contain code are don't appear to be executable, but code-containing regions are writable??</li>
+                    <li>While data and instructions are backed by the same memory, there is a separate dcache and icache.</li>
+                    <li>The standard store word instruction just writes to the data cache, but there is a separate store word instruction that causes an immediate writeback.</li>
+                </ul>
+
+                <p>Since the chip is proprietary, I did this entire project without a reference sheet for the processor. Because of that, I’m not totally sure why data regions weren’t executable (Side note: I tried flushing the dcache to see if that was it. It didn’t work, but identifying the right registers to write to was a pain without a reference sheet and I could have gotten that wrong).</p>
+
+                <p>Anyways, after figuring all of that out the plan was pretty simple. I would build a ROP chain to call a variant of <code>memcpy</code> that used writeback stores, set the destination to an executable region I knew would be a miss in the icache, and then jump there. I needed some gadgets to start ROP chaining, so I went to download ropper only to find out that it doesn’t support ARCompact. Neither does any other project I could find, so I got to search the binary for them myself.</p>
+
+                <pre><code># A ghidra script to grab some usable addresses for ROP chaining
+def getAt(addr):
+    disass = ghidra.program.disassemble.Disassembler.getDisassembler(currentProgram,ghidra.util.task.DummyCancellableTaskMonitor(),None)
+    aset = ghidra.program.model.address.AddressSet(addr)
+    clearListing(addr)
+    disass.disassemble(addr, aset)
+    return getInstructionAt(addr)
+
+def nearby(addr):
+    res = ""
+    for j in range(2, 10, 2):
+        v = getAt(toAddr(addr-j))
+        if v is None:
+            res += "| noop "
+            continue
+        res += "| " + str(v) + ", " + str(v.length) + " "
+    return res
+
+def run():
+    f = open("C:\\MyStuff\\reverse_engineering\\blink\\rop.txt", "w")
+    for i in range(0x20003800, 0x20052ef4, 2):
+        v = getAt(toAddr(i))
+        if(str(v) == "pop_s blink"):
+            if(str(getAt(toAddr(i + v.length))) == "j_s blink"):
+                f.write(hex(i) + ": " + nearby(i) + "\n")
+    f.close()
+
+run()
+                </code></pre>
+
+                <p>This script is made less useful by the fact that, to save space, the compiler consolidates function epilogues to one location that it branches to at the end of each function that uses caller-saved registers.</p>
+
+                <img src="blink/function_epilogues.png" style="width: 100%;" />
+                <p style="text-align: center;">A call to ‘load_r13-20_and_return’ or similar ends every function that uses caller-saved registers.</p>
+
+                <p>I could expand my search to include these, but it finds 300 or so gadgets as is, which ended up being enough to complete the memcpy and start running shellcode. The size of the buffer limited me to about 0x60 bytes though, and really I’d like to be running arbitrary C. You could accomplish that in any number of ways, but I chose to patch the firmware update API, as it already had the functionality implemented to download a lot of data. After the patch, posting data to <code>/api/set/app_fw_update</code> on that initialization Wi-Fi network will result in the Blink running it at address <code>0x20001000</code>.</p>
+
+                <p>All I had to do to get C running was grab a cross-compiler, set a few options to prevent the compiler from reordering my binary, and give the linker the right base address. Then I could use functions already existing in the binary by just defining them as an address in a header file.</p>
+
+                <img src="blink/c_code.png"  style="display: block; margin: 0 auto;" />
+                <p style="text-align: center;">C code to run</p>
+
+                <img src="blink/linker_script.png"  style="display: block; margin: 0 auto;" />
+                <p style="text-align: center;">Simple linker script, telling it to start at address <code>0x20001000</code></p>
+
+                <img src="blink/makefile.png" style="display: block; margin: 0 calc(0% - 150px);" />
+                <p style="text-align: center;">Makefile</p>
+
+                <p>With everything set up, I just connect to the network, type <code>make send</code>, and <code>payload.c</code> is compiled, the exploit runs, and the payload starts running.</p>
+
+                <img src="blink/running.png" style="display: block; margin: 0 auto;" />
+                <p>  I used this new functionality to leak the bootloader key (In the photos above, the payload leaks the device key, not the bootloader key. If I had run that code using the exploit described above it would have printed the device key as 11 11 …, but I found a way to not need to overwrite the device key). I then told Andre about the attack and he had a neat idea.</p>
+                <h2>It Was Something Dumb</h2>
+                <img src="blink/discord.png" style="width: 100%;" />
+                <p style="text-align: center;">Who needs standards</p>
+                <p>The Blink uses unauthenticated AES CBC for a significant portion of its encryption, which is vulnerable to malleability attacks. Given a known ciphertext/plaintext pair, an attacker without knowledge of the key can generate a ciphertext block that decrypts to an arbitrary value. This <a href="https://crypto.stackexchange.com/questions/3654/malleability-attacks-against-encryption-without-authentication">Stack Exchange post</a> explains it reasonably well. The layout of the set key message is one block (0x10 bytes) of IV, one block of the shared secret, and one block of the constant string “immediasemisyncm”. Since the last block is a constant, we have a plaintext/ciphertext pair. In fact, since this message is transmitted on an unsecured Wi-Fi network over HTTP, anyone within range of the Blink’s Wi-Fi network can eavesdrop on initialization to such a pair. (Note that an attacker could also just send a request to the Blink servers and get a pair by emulating the app. This would have required more RE work and is less cool.)</p>
+
+                <p>I flashed the Blink back to its original device key and set up a Python script that drops my laptop’s network card into monitor mode using airmon-ng, then listens on the appropriate channel. I used tshark to grab the first POST message sent to the Blink’s IP and pulled the data from that message.</p>
+
+                <p>Due to the stack layout, I was only able to get one block of usable ROP data. That wouldn’t be enough to get anything useful done, so I looked and found a way to pivot the stack and gain some more breathing room.</p>
+
+                <img src="blink/stack_pivot.png" style="display: block; margin: 0 auto;" />
+                <p style="text-align: center;">A stack pivot gadget</p>
+
+                <p>All I needed to do was control <code>r0</code> and jump to this address. I could set the stack to the start of the message buffer; in particular, I could use the buffer containing the message before decryption. The pivot didn’t make things too easy – popping off 0x48 bytes from the buffer only gave me 0x28 left to work with before running into the overflow – but with some code golf, I was able to make it work (It wouldn’t have been a problem at all if I had a ton of gadgets to choose from, but I still only had the 300. The only register I could even easily load to was <code>r0</code>).</p>
+
+                <p>This exploit allows arbitrary code execution from anywhere within range of the Blink’s Wi-Fi network, so long as someone happens to be setting it up at the time. The constraints make this more useful as a jailbreak than an actual attack, unless it’s a really sophisticated attacker. If you’re worried about nation-states, you probably shouldn’t be buying IoT devices anyway. Notably though, the conditions generally preclude a patch from being useful; by the time the Blink is online to get its updated firmware, it’s no longer in danger of being exploited.</p>
+
+                <h2>Validating the Bug</h2>
+                <p>By the time I had gotten the exploit working, the firmware I was working with was way out of date. I doubted it would get patched, but it’s generally good practice to check. Unfortunately, whenever I tried to connect the Blink to the app to get it to update, the Blink froze. A few print statement insertions later, I narrowed down the fault to the SPI flash write routine.</p>
+
+                <img src="blink/spi_flash_write.png" style="display: block; margin: 0 auto;" />
+                <p style="text-align: center;">Function to write to SPI flash at address <code>dst</code></p>
+
+                <p>The problem: <code>is_spi_busy</code> would never return 0. Patching that function to just sleep for a quarter second then return 0 caused the write to succeed, but that patch vanished after a reboot, and I couldn’t persist it because of trusted boot. I was able to talk to the SPI flash via flashrom just fine. After running flashrom in verbose mode, the issue was obvious.</p>
+
+                <img src="blink/flashrom_status.png" style="display: block; margin: 0 auto;" />
+                <p style="text-align: center;">Flashrom reads the status register</p>
+
+                <img src="blink/status_register.png" style="display: block; margin: 0 auto;" />
+                <p style="text-align: center;">Description of status register from SPI flash data sheet</p>
+
+                <p>Only bit 0 of the status register describes whether or not the flash is busy, but the Blink waits until the entire status register is 0 (is_spi_busy just reads the status register). Somehow bit 6 had gotten flipped to a 1, meaning the Blink thought the flash chip never finished its write. Flashrom, having properly masked the status register, never had a problem. In theory, this should be an easy fix; all I have to do is use flashrom to flip that bit back, and the bug in the Blink’s code no longer matters.</p>
+
+                <p>Unfortunately, flashrom does not support write-protect for that model of SPI flash. At this point, I could patch flashrom to fix the bit flip. Or I could try and break the Blink’s trusted boot system to patch the firmware and fix the bug.</p>
+
+                <h2>Breaking Trusted Boot</h2>
+                <p>Escaping trusted boot seemed like the more fun of the two options. Very early on in the reverse engineering process, I had tried editing the app stored in flash; this caused an error to be printed in the bootloader and the device to freeze. I spent a few days reverse engineering the boot process and got a reasonably good idea of how it worked.</p>
+
+                <p>The flash dump contained a few kilobytes of ARM code that threw me off for a while when doing the initial analysis of the binary. It turns out that the PG22C200FI (remember that photo earlier?) is used entirely for trusted boot. My current best analysis of boot procedure goes as follows:</p>
+                <ol>
+                    <li>The ARM bootloader is loaded (There’s also an encrypted secure enclave segment in the flash dump. Presumably that goes before this, but I haven’t explored that).</li>
+                    <li>The ARM bootloader loads the ARM app from internal flash.</li>
+                    <li>The ARM bootloader selects the appropriate ARC bootloader, either from memory in the ARM bootloader segment or the ARM app segment if there has been an update.</li>
+                    <li>The ARM bootloader transmits the ARC bootloader to the ARC chip.</li>
+                    <li>The ARM bootloader transmits initialization data to the ARC chip.</li>
+                    <li>The ARC chip starts running the ARC bootloader and the ARM chip transitions to the ARM app. They communicate via I2C.</li>
+                    <li>The ARC bootloader loads the ARC app via SPI flash and verifies it matches either the hard-coded hash of the matching ARC app (it appears that every app update must include a bootloader update to facilitate this), or the hash of the factory reset app.</li>
+                    <li>The Blink boots successfully.</li>
+                </ol>
+
+                <p>The additional data loaded into the ARC bootloader by the ARM bootloader includes a hash of the factory reset app. This is used to restore the Blink if an update fails somehow; the factory reset bundle is never actually deleted from the flash, and if the updated app is corrupted it is loaded as a backup. In a fairly egregious breach of security, there are no protections on the hash of the factory reset app; it can just be updated with no authentication.</p>
+
+                <img src="blink/factory_reset_hash.png" style="display: block; margin: 0 auto;" />
+                <p style="text-align: center;">Save factory reset app hash when updating from a factory bundle to an over-the-air firmware bundle</p>
+
+                <p>As can be seen above, the code that does so even has a nice debug print to make it easy to identify what exactly is going on. (The instruction <code>bl.d</code> means: branch & link but first execute the following instruction, presumably for pipelining reasons). With the capability to change the factory reset hash at will, we can just invalidate the updated firmware, write whatever firmware we want to the factory reset app region, and reboot.</p>
+
+                <p>I patched the firmware to fix the SPI flash bug and updated the Blink to the newest software version. After doing so, I dumped the flash again, separated the image into its component parts, checked that the exploits still existed in the newest version, and updated all my hard-coded addresses with the appropriate new ones. I had working arbitrary code execution with persistence and created a proof of concept that just made the Blink tap out SOS in Morse code on its main LED.</p>
+
+                <h2>Bug Bounty</h2>
+                <p>Having done all this work, I figured it would be nice to get paid for it. I found the Blink video doorbell listed as a target under <a href="https://hackerone.com/ring">Ring’s HackerOne page</a> and submitted a report.</p>
+                <h3>Timeline:</h3>
+                <ul>
+                    <li><strong>June 8:</strong> I submit report</li>
+                    <li><strong>June 9:</strong> Vulnerability triaged by HackerOne as Medium severity due to “constrained impact as it requires physical proximity during the specific initialization window.”</li>
+                    <li><strong>June 9:</strong> I suggest a higher severity might be more accurate, as the Ring program description states that "Vulnerabilities that allow an attacker to perform remote or local bypass of critical security controls for example secure boot bypass fall into [Critical]." and “Vulnerabilities that allow an attacker to perform arbitrary code execution… are also classified as critical vulnerabilities.”</li>
+                    <li><strong>June 11:</strong> Ring staff update severity to critical</li>
+                    <li><strong>June 12:</strong> Ring staff mark report as triaged</li>
+                    <li><strong>June 18:</strong> I ask for an update</li>
+                    <li><strong>June 25:</strong> Ring staff: "Dropping it down to high due to attack complexity." This was the entire message.</li>
+                    <li><strong>June 25:</strong> $7,000 bounty awarded</li>
+                    <li><strong>June 25:</strong> I note that the vulnerability is a stack overflow due to user-supplied length and pretty simple abuse of intended functionality. I ask for more details as to what complexity warranted the severity drop.</li>
+                    <li><strong>July 4:</strong> I repeat my request for more details</li>
+                    <li><strong>July 10:</strong> I repeat my request for more details (The minimum payout for a 'critical' vulnerability is $20,000!)</li>
+                    <li><strong>July 16, 4:10pm:</strong> I inform the Blink team that I will be publishing a writeup and POC on August 1st.</li>
+                    <li><strong>July 16, 5:23pm:</strong> The Blink team demands that I not publish said writeup</li>
+                    <li><strong>July 16:</strong> I inform them that I will be publishing it anyway. </li>
+                    <li><strong>July 22:</strong> Firmware version 12.82 is released, patching the stack overflow vulnerability</li>
+                </ul>
+                <h3>Some Thoughts</h3>
+                <p>As of July 31st, I have not heard another word as to why the vulnerability was downgraded. This is disappointing; by my estimation, $7,000 is probably no more than a tenth of the value of this exploit chain to an appropriately motivated attacker. $20,000 would have been quite nice, this was rather a lot of work and the exploit chain is fairly unambigously critical according to their definition.</p>
+                <p>Disclosing without permission is mildly risky, but I ran the exploit entirely on machines I own. I see no possible way to interpret anything I've done as a violation of the computer fraud and abuse act. It's hard to argue with the results; (one of) the bugs got patched in 6 days, after over a month of no progress. HackerOne lists the penalty for unauthorized disclosure as a 'Final Warning,' which is chill. I'm not planning on giving them any exploits I might find in the future anyways, given how I was treated this time. (HackerOne claims to have mediation to resolve these kinds of disputes. It has not been available for me in the past month).</p>
+                <p>Proof of concept for the vulnerability on version 12.81 is <a href="https://github.com/JacksonDonaldson/orbital-fracture">on my Github</a> (though for copyright reasons, the patched SOS binary is not included). I'm calling the exploit 'orbital fracture' for no particular reason. Feel free to reach out with any questions.</p>
+                <p>Hacking stuff is fun</p>
+                <p>-Jackson</p>
+            </div>
+			<div style="width:840;margin:auto;">
+				
+				
+			</div>
+		</div>
+		
+	</body>
+</html>
