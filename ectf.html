@@ -27,7 +27,7 @@
 			<div style="width:840;margin:auto;">
 				<h1>Bad Crypto and Infinite Birthdays</h1>
 				<h2>A writeup for MITRE's Embedded Capture The Flag competition</h2>
-				<p> I competed in MITRE's 2025 Embedded Capture The Flag (ECTF) competition with the University of Michigan. I wrote a QEMU implementation for the MAX78000FTHR dev board used in the competition, integrated AFL into uart in QEMU system mode for some fuzzing capabilities, and then was really sad when the entire competition turned out to be attacks on bad crypto, rather than any binary exploitation. Learned a lot doing it anyways, such is life.</p>
+				<p> I competed in MITRE's 2025 Embedded Capture The Flag (ECTF) competition with the University of Michigan. I wrote a QEMU implementation for the MAX78000FTHR dev board used in the competition [August 2025 update: it's now available <a href="https://www.qemu.org/2025/08/26/qemu-10-1-0/">upstream in QEMU 10.1</a>!], integrated AFL into uart in QEMU system mode for some fuzzing capabilities, and then was really sad when the entire competition turned out to be attacks on bad crypto, rather than any binary exploitation. Learned a lot doing it anyways, such is life.</p>
 				
 				<p> Anyways, the basic idea behind the 2025 ECTF was to create a satellite TV system. Each team made an "encoder" to sit at a secure site and encrypt TV frames for broadcasting and a "decoder" to distribute to customers to decrypt those broadcasted frames. Decoders were to accept subscriptions that specified time ranges and channel numbers, then only decrypt TV frames that fell into subscribed channels and times.</p>
 				
